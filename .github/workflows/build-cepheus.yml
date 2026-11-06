@@ -46,7 +46,7 @@ permissions:
 jobs:
   kernel:
     # XNU 8796 needs Xcode 15 (iig ABI) -> macos-14, like ios-sweet.
-    runs-on: macos-14
+    runs-on: macos-15-intel
     timeout-minutes: 240
     env:
       # Without MACOS_VERSION build.sh pops an interactive gum menu and dies
@@ -103,7 +103,7 @@ jobs:
           # build.sh only checks that xcodes exists (Xcode is preinstalled); stub it
           printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
           sudo chmod +x /usr/local/bin/xcodes
-          XC=$(ls -d /Applications/Xcode_*.app | sort -V | head -1)
+          XC=/Applications/Xcode_16.2.app
           echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
           sudo xcode-select -s "$XC"
           xcodebuild -version
