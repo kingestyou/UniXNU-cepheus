@@ -27,7 +27,8 @@ CPU_NEW = """    /* cepheus: ios-sweet builds a native 16K kernel. TCR.TG0/TG1 e
     const bool pages_4k=PAGE_SIZE==4096 && out->kernel_page_bytes==4096 &&
         out->kernel_map_page_bytes==4096 && ((out->tcr>>14)&3)==0 && ((out->tcr>>30)&3)==2;
     const bool pages_16k=PAGE_SIZE==16384 && out->kernel_page_bytes==16384 &&
-        out->kernel_map_page_bytes==16384 && ((out->tcr>>14)&3)==1 && ((out->tcr>>30)&3)==1;
+        out->kernel_map_page_bytes==16384 && ((out->tcr>>30)&3)==1 &&
+        (((out->tcr>>14)&3)==1 || ((out->tcr>>14)&3)==2); /* EL0 may be 4K (iOS binaries) */
     bool native=(pages_4k||pages_16k) && (out->sctlr&1) &&
         (out->ttbr1&UINT64_C(0x0000fffffffff000));
     IOLog("NativeAdrenoCpu: guard PAGE=%lu page=%llu kmap=%llu tcr=%llx sctlr=%llx ttbr1=%llx 4k=%d 16k=%d native=%d\\n",
