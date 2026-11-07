@@ -1,0 +1,250 @@
+name: build-cepheus-gpu
+
+# M1: cepheus (Xiaomi Mi 9, SM8150 / Adreno 640) A640 GPU kernel bring-up.
+#
+# Same kernel/UEFI pipeline as build-cepheus, plus:
+#   * pinned UniXNU-nabu A640 driver sources (same SoC as cepheus)
+#   * cepheus board facts (SM8150 windows/SIDs/IRQs) and embedded vendor firmware
+#     from the pinned LineageOS cepheus vendor tree
+#   * 0086-stage-cepheus-gpu.sh, which installs the driver under iokit/Kernel/Adreno
+#   * M1 is the CP-proof build: GMU power/firmware, SMMU, CP ring and ZAP only.
+#     Metal publication is a later milestone.
+#
+# The hardware sequence is gated by the boot arguments nabu-gpu=1 and
+# nabu-gpu-delay=<seconds>; without nabu-gpu=1 nothing is programmed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'full = complete port (only supported value here)'
+        required: false
+        default: full
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    runs-on: macos-15-intel
+    timeout-minutes: 240
+    env:
+      MACOS_VERSION: "13.5"
+      MACHINE_CONFIG: SWEET
+      KERNEL_CONFIG: DEVELOPMENT
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: cepheus
+
+      - name: Checkout ios-sweet (XNU 8796 build scripts + sweet platform patches)
+        uses: actions/checkout@v4
+        with:
+          repository: dipa-studio/ios-sweet
+          ref: 45263bee51df4a0f55cdf9c649af886399488ddb
+          path: ios-sweet
+
+      - name: Fetch darwin-xnu-build at the pinned commit ios-sweet uses
+        env:
+          DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
+        run: |
+          git init -q dxb
+          git -C dxb fetch -q --depth 1 "https://github.com/blacktop/darwin-xnu-build" "$DXB_SHA"
+          git -C dxb checkout -q FETCH_HEAD
+
+      - name: Assemble the cepheus A640 GPU tree
+        env:
+          NABU_SHA: 54b4f98457f8e9e232cc0a077c20d08d0b2f0ac9
+          MUPPETS_SHA: 0a93f4efd54bdbc4049ff800428d9c67f5a4e045
+        run: |
+          set -euo pipefail
+          git init -q nabu-src
+          git -C nabu-src fetch -q --depth 1 "https://github.com/zzweiqing/UniXNU-nabu" "$NABU_SHA"
+          git -C nabu-src checkout -q FETCH_HEAD
+
+          G=cepheus/inputs/gpu
+          mkdir -p "$G/a640" "$G/upstream" "$G/board" "$G/firmware"
+          cp -R nabu-src/gpu/a640/. "$G/a640/"
+          cp -R nabu-src/gpu/upstream/Adreno6xx "$G/upstream/Adreno6xx"
+          cp -R nabu-src/gpu/upstream/ArmSmmu4K "$G/upstream/ArmSmmu4K"
+          cp -R nabu-src/gpu/upstream/AdrenoPM4 "$G/upstream/AdrenoPM4"
+          cp cepheus/xnu/CepheusGpuResources.cpp cepheus/xnu/CepheusGpuBuild.h \
+             cepheus/xnu/CepheusGpuStart.c "$G/board/"
+
+          BASE="https://raw.githubusercontent.com/TheMuppets/proprietary_vendor_xiaomi_cepheus/$MUPPETS_SHA/proprietary/vendor/firmware"
+          for f in a640_gmu.bin a630_sqe.fw a640_zap.mdt a640_zap.b02; do
+            curl -fsSL -o "$G/firmware/$f" "$BASE/$f"
+          done
+          shasum -a 256 "$G/firmware/"*
+
+          python3 cepheus/scripts/gen-cepheus-firmware.py "$G/firmware" "$G/board/CepheusGpuFirmware.h"
+          ls -la "$G/board/"
+
+      - name: Stage cepheus sources and patches
+        run: |
+          set -euo pipefail
+          bash cepheus/scripts/build-kernel-patches.sh ios-sweet
+          cp -R cepheus/inputs/gpu/. ios-sweet/xnu/patches/cepheus-gpu/
+          cp ios-sweet/xnu/patches/*.patch ios-sweet/xnu/patches/*.sh dxb/patches/ 2>/dev/null || true
+          cp -R ios-sweet/xnu/patches/cepheus-gpu dxb/patches/
+          cp cepheus/xnu/cepheus_touch.c cepheus/xnu/cepheus_fts_events.h cepheus/xnu/cepheus_clock_status.h cepheus/xnu/cepheus_gpi_layout.h dxb/patches/
+          cp cepheus/xnu/cepheus_i2c_bitbang.h dxb/patches/
+          cp cepheus/xnu/cepheus_soc.c cepheus/xnu/cepheus_soc.h dxb/patches/
+          cp cepheus/xnu/cepheus_cpu_policy.h dxb/patches/
+          python3 cepheus/scripts/prepare-touch-power-patch.py ios-sweet/xnu/patches dxb/patches/0084-cepheus-touch-power.patch
+          # 0083 (performance/fixedtimer) is intentionally NOT applied: on cepheus it
+          # stalls SpringBoard's main thread (touch events reach HID but the UI never
+          # processes them). The non-perf kernel is the known-good input path.
+          ls dxb/patches/ | grep -E 'cepheus|0086' || true
+          ls -la dxb/patches/cepheus-gpu/ | head
+          sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
+
+      - name: Host dependencies
+        run: |
+          brew install jq gum bash cmake ninja
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
+          sudo chmod +x /usr/local/bin/xcodes
+          XC=/Applications/Xcode_16.2.app
+          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+          xcrun --find iig
+
+      - name: Build XNU 8796 (SWEET platform, arm64)
+        working-directory: dxb
+        env:
+          MAKEFLAGS: '-k'
+          MACHINE_CONFIG: SWEET
+          KERNEL_CONFIG: DEVELOPMENT
+        run: bash build.sh
+
+      - name: Stage the kernel as kernel.macho
+        run: |
+          mkdir -p cepheus/inputs/cepheus
+          find dxb -type f -name 'kernel*' 2>/dev/null > /tmp/cands.txt
+          K=""
+          while IFS= read -r f; do
+            sz=$(wc -c < "$f" | tr -d ' ')
+            [ "$sz" -gt 2000000 ] || continue
+            magic=$(od -An -tx1 -N4 "$f" | tr -d ' \n')
+            if [ "$magic" = "cffaedfe" ]; then K="$f"; break; fi
+          done < /tmp/cands.txt
+          if [ -z "$K" ]; then
+            echo "no Mach-O kernel found; candidates:" >&2
+            while IFS= read -r f; do
+              echo "  $(wc -c < "$f" | tr -d ' ') $(file -b "$f") $f" >&2
+            done < /tmp/cands.txt
+            exit 1
+          fi
+          echo "picked kernel: $K"
+          cp "$K" cepheus/inputs/cepheus/kernel.macho
+          ls -la cepheus/inputs/cepheus/kernel.macho
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cepheus-kernel
+          path: cepheus/inputs/cepheus/kernel.macho
+          if-no-files-found: error
+
+  build:
+    needs: kernel
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the SM8150 kernel built by the kernel job
+        uses: actions/download-artifact@v4
+        with:
+          name: cepheus-kernel
+          path: inputs/cepheus
+
+      - name: Checkout UniXNU driver (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: b6ae99c17194e6a18fd819d3148e69fe405e91fc
+          path: unixnu
+          submodules: recursive
+
+      - name: Checkout Project Aloha UEFI (SM8150)
+        uses: actions/checkout@v4
+        with:
+          repository: Project-Aloha/mu_aloha_platforms
+          ref: 0b79812897177e9fdd1fb8cb02f05f5338322541
+          path: uefi
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Host tools (EDK2 + UniXNU driver)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build uuid-dev bison flex nasm iasl gcc g++ python3-dev clang lld llvm mtools unzip zip
+          for t in clang lld-link llvm-lib llvm-rc; do
+            if command -v "$t" >/dev/null 2>&1; then echo "have $t"; continue; fi
+            cand=$(ls /usr/lib/llvm-*/bin/"$t" /usr/bin/"$t"-* 2>/dev/null | sort -V | tail -1)
+            if [ -n "$cand" ]; then sudo ln -sf "$cand" "/usr/local/bin/$t"; echo "linked $t -> $cand"; else echo "MISSING $t"; fi
+          done
+          command -v clang lld-link llvm-lib llvm-rc
+          pip install -r unixnu/requirements.txt || true
+
+      - name: Apply the SM8150 patches (vendored in this repo)
+        run: |
+          git -C unixnu apply ../patches/unixnu-cepheus.patch
+          git -C uefi apply ../patches/aloha-cepheus.patch
+          git -C unixnu/drivers/DarwinBoot apply ../../../patches/darwinboot-cepheus.patch
+
+      - name: Fetch cepheus DTB (real android-cepheus.dtb shipped by Aloha)
+        run: bash scripts/get-cepheus-dtb.sh
+
+      - name: Fetch iPhone X (D22AP) base ADT (auto from public IPSW)
+        run: bash scripts/get-base-d22ap.sh
+
+      - name: Fetch the prebuilt BaseCrypto driver (Mu external dependency)
+        run: |
+          DEST=uefi/MU_BASECORE/CryptoPkg/Binaries/edk2-basecrypto-driver-bin_extdep
+          mkdir -p "$DEST"
+          curl -sL -o /tmp/cryptobin.zip \
+            https://github.com/microsoft/mu_crypto_release/releases/download/v1.1.3/Mu_CryptoBin_v1_1_3.zip
+          unzip -q -o /tmp/cryptobin.zip -d "$DEST"
+          ls -l "$DEST/Driver/Bin/CryptoDriver.inc.dsc"
+
+      - name: Build the UEFI firmware volume (SM8150 + xiaomi-cepheus device)
+        env:
+          EXTRA_OPTFLAGS: "-Wno-error"
+        run: python3 scripts/build-firmware.py
+
+      - name: Build the FAT payload (kernel + cepheus ADT)
+        run: python3 scripts/build-payload.py
+
+      - name: Pack the Android boot image
+        run: python3 scripts/build-bootimg.py
+
+      - name: Dump build logs on failure
+        if: failure()
+        run: |
+          ls -la out/cepheus/logs/ 2>/dev/null || echo "(no logs dir)"
+          for f in out/cepheus/logs/*.log; do
+            [ -f "$f" ] || continue
+            echo "----- $f -----"
+            tail -n 80 "$f"
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-logs
+          path: out/cepheus/logs/
+          if-no-files-found: ignore
+
+      - name: Report
+        run: cat out/cepheus/boot/boot.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boot-cepheus.img
+          path: out/cepheus/boot/boot-cepheus.img
+          if-no-files-found: error
