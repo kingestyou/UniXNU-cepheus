@@ -127,6 +127,12 @@ def patch_cpu(path: pathlib.Path) -> int:
     if CPU_OLD not in text:
         print("cpu guard block not found in", path, file=sys.stderr)
         return 1
+    if "#include <IOKit/IOLib.h>" not in text:
+        anchor = '#include "NativeAdrenoMemory.h"'
+        if anchor not in text:
+            print("cpu include anchor not found in", path, file=sys.stderr)
+            return 1
+        text = text.replace(anchor, anchor + "\n#include <IOKit/IOLib.h>", 1)
     path.write_text(text.replace(CPU_OLD, CPU_NEW, 1), encoding="utf-8")
     print("patched", path)
     return 0
