@@ -71,6 +71,11 @@ jobs:
           cp cepheus/xnu/CepheusGpuResources.cpp cepheus/xnu/CepheusGpuBuild.h \
              cepheus/xnu/CepheusGpuStart.c "$G/board/"
 
+          # ios-sweet is a native 16K kernel; the A640 driver was written for a
+          # 4K UniXNU kernel. Relax the page-granule guard (the SMMU stage-1
+          # tables remain 4K, independent of the CPU granule).
+          python3 cepheus/scripts/patch-adreno-16k.py "$G/upstream/Adreno6xx/NativeAdrenoCpu.cpp"
+
           BASE="https://raw.githubusercontent.com/TheMuppets/proprietary_vendor_xiaomi_cepheus/$MUPPETS_SHA/proprietary/vendor/firmware"
           for f in a640_gmu.bin a630_sqe.fw a640_zap.mdt a640_zap.b02; do
             curl -fsSL -o "$G/firmware/$f" "$BASE/$f"
@@ -116,7 +121,17 @@ jobs:
           MAKEFLAGS: '-k'
           MACHINE_CONFIG: SWEET
           KERNEL_CONFIG: DEVELOPMENT
-        run: bash build.sh
+        run: |
+          set -o pipefail
+          bash build.sh 2>&1 | tee /tmp/xnu-build.log
+
+      - name: Upload the kernel build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-log
+          path: /tmp/xnu-build.log
+          if-no-files-found: warn
 
       - name: Stage the kernel as kernel.macho
         run: |
