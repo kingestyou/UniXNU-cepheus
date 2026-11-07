@@ -7,6 +7,11 @@
 # Do not replace the reference source in place: later 0062/0063 patches target
 # it, and a malformed/stale patch can be silently skipped by build.sh.
 #
+# 0086 is a stage-only script: it installs the A640 GPU sources into
+# iokit/Kernel/Adreno and appends the units to iokit/conf/files and
+# bsd/conf/files. The GPU tree itself is assembled by the workflow into
+# $DEST/xnu/patches/cepheus-gpu (pinned UniXNU-nabu + board files).
+#
 # Usage: build-kernel-patches.sh /path/to/ios-sweet
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,5 +26,12 @@ install -m 644 "$ROOT/xnu/cepheus_gpi_layout.h" "$DEST/xnu/patches/"
 install -m 644 "$ROOT/xnu/cepheus_i2c_bitbang.h" "$DEST/xnu/patches/"
 install -m 644 "$ROOT/xnu/0085-stage-cepheus-soc.sh" "$ROOT/xnu/0085-cepheus-soc.patch" "$ROOT/xnu/cepheus_soc.c" "$ROOT/xnu/cepheus_soc.h" "$DEST/xnu/patches/"
 install -m 644 "$ROOT/xnu/cepheus_cpu_policy.h" "$DEST/xnu/patches/"
-echo "installed 0082-cepheus-touch.patch into $DEST/xnu/patches"
-ls -l "$DEST/xnu/patches/" | tail -3
+
+# cepheus A640 GPU (M1): stage script + board files.
+mkdir -p "$DEST/xnu/patches/cepheus-gpu/board"
+install -m 755 "$ROOT/xnu/0086-stage-cepheus-gpu.sh" "$DEST/xnu/patches/0086-stage-cepheus-gpu.sh"
+install -m 644 "$ROOT/xnu/CepheusGpuResources.cpp" "$ROOT/xnu/CepheusGpuBuild.h" \
+    "$ROOT/xnu/CepheusGpuStart.c" "$DEST/xnu/patches/cepheus-gpu/board/"
+
+echo "installed cepheus patches into $DEST/xnu/patches"
+ls -l "$DEST/xnu/patches/" | tail -4
