@@ -948,3 +948,23 @@ index 2826935..249a9ab 100644
 +INF UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.inf
 +INF DarwinBootPkg/Driver/DarwinBoot.inf
 +INF AndromedaPkg/Driver/ShengBootMemoryDxe/ShengBootMemoryDxe.inf
+diff --git a/Platforms/SurfaceDuo1Pkg/Device/xiaomi-cepheus/Library/PlatformMemoryMapLib/PlatformMemoryMapLib.c b/Platforms/SurfaceDuo1Pkg/Device/xiaomi-cepheus/Library/PlatformMemoryMapLib/PlatformMemoryMapLib.c
+index 4ed57e8..afd0400 100644
+--- a/Platforms/SurfaceDuo1Pkg/Device/xiaomi-cepheus/Library/PlatformMemoryMapLib/PlatformMemoryMapLib.c
++++ b/Platforms/SurfaceDuo1Pkg/Device/xiaomi-cepheus/Library/PlatformMemoryMapLib/PlatformMemoryMapLib.c
+@@ -67,14 +67,7 @@ static ARM_MEMORY_REGION_DESCRIPTOR_EX gDeviceMemoryDescriptorEx[] = {
+     //12GB
+     // Memory hole: 0xB9900000 - 0xBFFFFFFF
+     // Size: 0x66FFFFF
+-    {"DXE Heap",          0x0C0000000, 0x7FD00000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv,   WRITE_BACK_XN},
+-
+-#if USE_MEMORY_FOR_SERIAL_OUTPUT == 1
+-    {"RAM Partition",     0x140000000, 0x3FE00000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv,   WRITE_BACK_XN},
+-    {"PStore",            0x17FE00000, 0x00200000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_THROUGH_XN},
+-#else
+-    {"RAM Partition",     0x140000000, 0x40000000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv,   WRITE_BACK_XN},
+-#endif
++    {"DXE Heap",          0x0C0000000, 0x140000000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv,   WRITE_BACK_XN},
+ 
+     /*----4GB till Here----*/
+ 
